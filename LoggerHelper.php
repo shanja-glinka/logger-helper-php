@@ -10,6 +10,13 @@ class LoggerHelper
     /** @var string */
     private $fileName;
 
+    /**
+     * Если требуется var_dump в файл, иначе prin_r
+     *
+     * @var boolean
+     */
+    public $asDump = true;
+
 
 
     public function __construct(string $topic = '', string $module = '')
@@ -27,42 +34,46 @@ class LoggerHelper
      */
     public function writeToToLog($message, bool $clearBefore = false): bool
     {
-        if ($clearBefore) {
-            unlink($this->fileName);
-        }
-
-        clearstatcache();
-
-        $fileStream = fopen($this->fileName, 'a');
-        if (!$fileStream) {
-            if (!mkdir(dirname($this->fileName), 0755, true)) {
-                return false;
+        try {
+            if ($clearBefore) {
+                unlink($this->fileName);
             }
-            $fileStream = fopen($this->fileName, 'a');
+
+            clearstatcache();
+
+            $fileStream = @fopen($this->fileName, 'a');
+            if (!$fileStream) {
+                if (!mkdir(dirname($this->fileName), 0755, true)) {
+                    return false;
+                }
+                $fileStream = fopen($this->fileName, 'a');
+            }
+
+            $timer = file_exists($this->fileName) ? @filemtime($this->fileName) : 0;
+            $timerDelay = abs(time() - $timer);
+
+            if (10 <= $timerDelay) {
+                fwrite($fileStream, '- - - - - [' . gmdate('d.m.y H:i:s') . ($timerDelay <= 120 ? ' +' . $timerDelay : '') . '] - - - - -' . "\n");
+            }
+
+            if (is_array($message) || is_object($message)) {
+                $message = $this->asDump ? var_export($message, true) : print_r($message, true);
+            }
+
+            $trace = $this->moduleName;
+
+            if (empty($trace)) {
+                $backtrace = debug_backtrace();
+                $trace = $backtrace[1]['file'] . ':' . $backtrace[1]['line'];
+            }
+
+            fwrite($fileStream, '<' . $trace . '> ' . $message . "\n");
+            fclose($fileStream);
+
+            return true;
+        } catch (Exception $ex) {
+            return false;
         }
-
-        $timer = file_exists($this->fileName) ? @filemtime($this->fileName) : 0;
-        $timerDelay = abs(time() - $timer);
-
-        if (10 <= $timerDelay) {
-            fwrite($fileStream, '- - - - - [' . gmdate('d.m.y H:i:s') . ($timerDelay <= 120 ? ' +' . $timerDelay : '') . '] - - - - -' . "\n");
-        }
-
-        if (is_array($message) || is_object($message)) {
-            $message = print_r($message, true);
-        }
-
-        $trace = $this->moduleName;
-
-        if (empty($trace)) {
-            $backtrace = debug_backtrace();
-            $trace = $backtrace[0]['file'] . ':' . $backtrace[0]['line'];
-        }
-
-        fwrite($fileStream, '<' . $trace . '> ' . $message . "\n");
-        fclose($fileStream);
-
-        return true;
     }
 
     /**
@@ -77,3 +88,4 @@ class LoggerHelper
         return $logger->writeToToLog($message, $clearBefore);
     }
 }
+
