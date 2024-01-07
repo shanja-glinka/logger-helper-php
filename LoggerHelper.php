@@ -1,6 +1,8 @@
 <?php
 
-namespace helpers;
+namespace backend\helpers;
+
+use Exception;
 
 class LoggerHelper
 {
@@ -10,12 +12,12 @@ class LoggerHelper
     /** @var string */
     private $fileName;
 
-    /**
-     * Если требуется var_dump в файл, иначе prin_r
-     *
-     * @var boolean
-     */
-    public $asDump = true;
+    const AS_PRINT = 0;
+    const AS_DUMP = 1;
+    const AS_EXPORT = 2;
+
+
+    private $logAs = self::AS_PRINT;
 
 
 
@@ -26,13 +28,18 @@ class LoggerHelper
     }
 
 
+    public function setLogType($logType)
+    {
+        $this->logAs = $logType;
+    }
+
     /**
      * @param mixed $message
      * @param string $topic
      * @param boolean $clear_before
      * @return bool
      */
-    public function writeToToLog($message, bool $clearBefore = false): bool
+    public function writeToLog($message, bool $clearBefore = false): bool
     {
         try {
             if ($clearBefore) {
@@ -56,9 +63,7 @@ class LoggerHelper
                 fwrite($fileStream, '- - - - - [' . gmdate('d.m.y H:i:s') . ($timerDelay <= 120 ? ' +' . $timerDelay : '') . '] - - - - -' . "\n");
             }
 
-            if (is_array($message) || is_object($message)) {
-                $message = $this->asDump ? var_export($message, true) : print_r($message, true);
-            }
+            $message = $this->transformLogMessage($message);
 
             $trace = $this->moduleName;
 
@@ -76,6 +81,49 @@ class LoggerHelper
         }
     }
 
+
+    /**
+     * @param mixed $message
+     */
+    private function transformLogMessage($message)
+    {
+
+        if (!is_array($message) && !is_object($message)) {
+            return $message;
+        }
+
+        switch ($this->logAs) {
+            case self::AS_PRINT:
+                return print_r($message, true);
+            case self::AS_DUMP:
+                return var_export($message, true);
+            case self::AS_EXPORT:
+                return $this->varexport($message, true);
+            default:
+                return $message;
+        }
+    }
+
+
+    /**
+     * @param mixed $expression
+     * @param bool $return
+     */
+    private function varexport($expression, bool $return = false)
+    {
+        $export = var_export($expression, true);
+        $export = preg_replace("/^([ ]*)(.*)/m", '$1$1$2', $export);
+        $array = preg_split("/\r\n|\n|\r/", $export);
+        $array = preg_replace(["/\s*array\s\($/", "/\)(,)?$/", "/\s=>\s$/"], [NULL, ']$1', ' => ['], $array);
+        $export = join(PHP_EOL, array_filter(['['] + $array));
+
+        if ($return) {
+            return $export;
+        } else {
+            echo $export;
+        }
+    }
+
     /**
      * @param mixed $message
      * @param string $topic
@@ -85,7 +133,22 @@ class LoggerHelper
     public static function addToLog($message, string $topic = '', bool $clearBefore = false)
     {
         $logger = new self($topic);
-        return $logger->writeToToLog($message, $clearBefore);
+        $logger->setLogType(self::AS_DUMP);
+
+        return $logger->writeToLog($message, $clearBefore);
+    }
+
+
+    /**
+     * @param mixed $message
+     * @param string $topic
+     * @return void
+     */
+    public static function arrayToLog($message, string $topic = '')
+    {
+        $logger = new self($topic);
+        $logger->setLogType(self::AS_EXPORT);
+
+        return $logger->writeToLog($message);
     }
 }
-
