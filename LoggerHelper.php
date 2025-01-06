@@ -1,154 +1,203 @@
 <?php
 
-namespace backend\helpers;
+namespace Backend\Helpers;
 
 use Exception;
+use RuntimeException;
+use DateTimeImmutable;
+use DateTimeInterface;
 
+/**
+ * Enum for log types
+ */
+enum LogType: int
+{
+    case PRINT = 0;
+    case DUMP = 1;
+    case EXPORT = 2;
+}
+
+/**
+ * LoggerHelper class for logging messages
+ */
 class LoggerHelper
 {
-    /** @var string */
-    private $moduleName;
+    private string $moduleName;
+    private string $fileName;
+    private LogType $logAs;
 
-    /** @var string */
-    private $fileName;
-
-    const AS_PRINT = 0;
-    const AS_DUMP = 1;
-    const AS_EXPORT = 2;
-
-
-    private $logAs = self::AS_PRINT;
-
-
-
-    public function __construct(string $topic = '', string $module = '')
-    {
-        $this->fileName = $_SERVER['DOCUMENT_ROOT'] . '/logs/log_' . $topic . '.txt';
+    /**
+     * LoggerHelper constructor.
+     *
+     * @param string      $topic        The topic name for the log.
+     * @param string      $module       The module name.
+     * @param string|null $logDirectory The path to the log directory. If null, uses DOCUMENT_ROOT/logs.
+     */
+    public function __construct(
+        string $topic = '',
+        string $module = '',
+        ?string $logDirectory = null
+    ) {
+        $logDirectory = $logDirectory ?? ($_SERVER['DOCUMENT_ROOT'] ?? __DIR__) . '/logs';
+        $this->fileName = rtrim($logDirectory, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . "log_{$topic}.txt";
         $this->moduleName = $module;
+        $this->logAs = LogType::PRINT;
     }
 
-
-    public function setLogType($logType)
+    /**
+     * Sets the log type.
+     *
+     * @param LogType $logType The type of logging.
+     */
+    public function setLogType(LogType $logType): void
     {
         $this->logAs = $logType;
     }
 
     /**
-     * @param mixed $message
-     * @param string $topic
-     * @param boolean $clear_before
-     * @return bool
+     * Writes a message to the log.
+     *
+     * @param mixed $message      The message to write.
+     * @param bool  $clearBefore Whether to clear the log file before writing.
+     *
+     * @return bool True on success, false on failure.
      */
-    public function writeToLog($message, bool $clearBefore = false): bool
+    public function writeToLog(mixed $message, bool $clearBefore = false): bool
     {
         try {
-            if ($clearBefore) {
-                unlink($this->fileName);
-            }
-
-            clearstatcache();
-
-            $fileStream = @fopen($this->fileName, 'a');
-            if (!$fileStream) {
-                if (!mkdir(dirname($this->fileName), 0755, true)) {
-                    return false;
+            if ($clearBefore && file_exists($this->fileName)) {
+                if (!unlink($this->fileName)) {
+                    throw new RuntimeException("Failed to delete log file: {$this->fileName}");
                 }
-                $fileStream = fopen($this->fileName, 'a');
             }
 
-            $timer = file_exists($this->fileName) ? @filemtime($this->fileName) : 0;
-            $timerDelay = abs(time() - $timer);
-
-            if (10 <= $timerDelay) {
-                fwrite($fileStream, '- - - - - [' . gmdate('d.m.y H:i:s') . ($timerDelay <= 120 ? ' +' . $timerDelay : '') . '] - - - - -' . "\n");
+            $logDirectory = dirname($this->fileName);
+            if (!is_dir($logDirectory) && !mkdir($logDirectory, 0755, true)) {
+                throw new RuntimeException("Failed to create log directory: {$logDirectory}");
             }
 
-            $message = $this->transformLogMessage($message);
+            $currentTime = new DateTimeImmutable('now', new \DateTimeZone('UTC'));
+            $formattedTime = $currentTime->format('d.m.y H:i:s');
+
+            $timer = file_exists($this->fileName) ? filemtime($this->fileName) : 0;
+            $timerDelay = time() - $timer;
+
+            $logEntries = [];
+
+            if ($timerDelay >= 10) {
+                $timerInfo = $timerDelay <= 120 ? " +{$timerDelay}" : '';
+                $logEntries[] = "- - - - - [{$formattedTime}{$timerInfo}] - - - - -";
+            }
+
+            $transformedMessage = $this->transformLogMessage($message);
 
             $trace = $this->moduleName;
-
             if (empty($trace)) {
-                $backtrace = debug_backtrace();
-                $trace = $backtrace[1]['file'] . ':' . $backtrace[1]['line'];
+                $backtrace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2);
+                $caller = $backtrace[1] ?? null;
+                if ($caller) {
+                    $trace = "{$caller['file']}:{$caller['line']}";
+                } else {
+                    $trace = 'unknown';
+                }
             }
 
-            fwrite($fileStream, '<' . $trace . '> ' . $message . "\n");
-            fclose($fileStream);
+            $logEntries[] = "<{$trace}> {$transformedMessage}";
 
-            return true;
+            $logContent = implode(PHP_EOL, $logEntries) . PHP_EOL;
+
+            // Open the file in append binary mode with locking
+            $fileHandle = fopen($this->fileName, 'ab');
+            if (!$fileHandle) {
+                throw new RuntimeException("Failed to open log file: {$this->fileName}");
+            }
+
+            if (flock($fileHandle, LOCK_EX)) {
+                fwrite($fileHandle, $logContent);
+                fflush($fileHandle);
+                flock($fileHandle, LOCK_UN);
+                fclose($fileHandle);
+                return true;
+            } else {
+                fclose($fileHandle);
+                throw new RuntimeException("Failed to lock log file: {$this->fileName}");
+            }
         } catch (Exception $ex) {
+            // Additional error handling can be implemented here, such as sending to an external service
+            error_log("LoggerHelper Error: " . $ex->getMessage());
             return false;
         }
     }
 
-
     /**
-     * @param mixed $message
+     * Transforms the log message into a string.
+     *
+     * @param mixed $message The message to transform.
+     *
+     * @return string The transformed message.
      */
-    private function transformLogMessage($message)
+    private function transformLogMessage(mixed $message): string
     {
-
-        if (!is_array($message) && !is_object($message)) {
-            return $message;
-        }
-
-        switch ($this->logAs) {
-            case self::AS_PRINT:
-                return print_r($message, true);
-            case self::AS_DUMP:
-                return var_export($message, true);
-            case self::AS_EXPORT:
-                return $this->varexport($message, true);
-            default:
-                return $message;
-        }
+        return match ($this->logAs) {
+            LogType::PRINT => print_r($message, true),
+            LogType::DUMP => var_export($message, true),
+            LogType::EXPORT => $this->varExportPretty($message),
+        };
     }
 
-
     /**
-     * @param mixed $expression
-     * @param bool $return
+     * Formats var_export output nicely.
+     *
+     * @param mixed $expression The expression to export.
+     *
+     * @return string The nicely formatted export.
      */
-    private function varexport($expression, bool $return = false)
+    private function varExportPretty(mixed $expression): string
     {
         $export = var_export($expression, true);
         $export = preg_replace("/^([ ]*)(.*)/m", '$1$1$2', $export);
-        $array = preg_split("/\r\n|\n|\r/", $export);
-        $array = preg_replace(["/\s*array\s\($/", "/\)(,)?$/", "/\s=>\s$/"], [NULL, ']$1', ' => ['], $array);
-        $export = join(PHP_EOL, array_filter(['['] + $array));
-
-        if ($return) {
-            return $export;
-        } else {
-            echo $export;
-        }
+        $lines = preg_split("/\r\n|\n|\r/", $export);
+        $lines = preg_replace([
+            "/\s*array\s\($/",
+            "/\)(,)?$/",
+            "/\s=>\s$/"
+        ], [
+            '',
+            ']$1',
+            ' => ['
+        ], $lines);
+        $export = "[\n" . implode(PHP_EOL, array_filter(['['] + $lines)) . "\n]";
+        return $export;
     }
 
     /**
-     * @param mixed $message
-     * @param string $topic
-     * @param boolean $clear_before
-     * @return void
+     * Static method to add a log entry with DUMP type.
+     *
+     * @param mixed  $message      The message to log.
+     * @param string $topic        The topic name for the log.
+     * @param bool   $clearBefore Whether to clear the log file before writing.
+     *
+     * @return bool True on success, false on failure.
      */
-    public static function addToLog($message, string $topic = '', bool $clearBefore = false)
+    public static function addToLog(mixed $message, string $topic = '', bool $clearBefore = false): bool
     {
-        $logger = new self($topic);
-        $logger->setLogType(self::AS_DUMP);
-
+        $logger = new self(topic: $topic);
+        $logger->setLogType(LogType::DUMP);
         return $logger->writeToLog($message, $clearBefore);
     }
 
-
     /**
-     * @param mixed $message
-     * @param string $topic
-     * @return void
+     * Static method to log an array with EXPORT type.
+     *
+     * @param mixed  $message The array or object to log.
+     * @param string $topic   The topic name for the log.
+     *
+     * @return bool True on success, false on failure.
      */
-    public static function arrayToLog($message, string $topic = '')
+    public static function arrayToLog(mixed $message, string $topic = ''): bool
     {
-        $logger = new self($topic);
-        $logger->setLogType(self::AS_EXPORT);
-
+        $logger = new self(topic: $topic);
+        $logger->setLogType(LogType::EXPORT);
         return $logger->writeToLog($message);
     }
 }
