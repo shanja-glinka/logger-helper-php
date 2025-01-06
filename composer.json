@@ -1,0 +1,21 @@
+{
+    "name": "shanja-glinka/logger-helper-php",
+    "description": "A flexible and efficient logging utility implementing Singleton and Strategy patterns for PHP 8.3+ applications.",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Shanja Glinka",
+            "email": "email@example.com"
+        }
+    ],
+    "require": {
+        "php": ">=8.3"
+    },
+    "autoload": {
+        "psr-4": {
+            "Helpers\\Logger\\": "src/"
+        }
+    },
+    "minimum-stability": "stable"
+}

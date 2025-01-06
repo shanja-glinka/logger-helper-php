@@ -1,73 +1,54 @@
 <?php
 
-namespace Backend\Helpers;
+namespace Helpers\Logging\Strategies;
 
 use Exception;
 use RuntimeException;
 use DateTimeImmutable;
-use DateTimeInterface;
+use Helpers\Logging\Contracts\LoggerStrategyInterface;
 
-/**
- * Enum for log types
- */
-enum LogType: int
+class FileLoggerStrategy implements LoggerStrategyInterface
 {
-    case PRINT = 0;
-    case DUMP = 1;
-    case EXPORT = 2;
-}
-
-/**
- * LoggerHelper class for logging messages
- */
-class LoggerHelper
-{
-    private string $moduleName;
     private string $fileName;
-    private LogType $logAs;
+    private string $moduleName;
+    private int $logType;
 
     /**
-     * LoggerHelper constructor.
-     *
-     * @param string      $topic        The topic name for the log.
-     * @param string      $module       The module name.
-     * @param string|null $logDirectory The path to the log directory. If null, uses DOCUMENT_ROOT/logs.
+     * LogType constants.
      */
-    public function __construct(
-        string $topic = '',
-        string $module = '',
-        ?string $logDirectory = null
-    ) {
-        $logDirectory = $logDirectory ?? ($_SERVER['DOCUMENT_ROOT'] ?? __DIR__) . '/logs';
-        $this->fileName = rtrim($logDirectory, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . "log_{$topic}.txt";
-        $this->moduleName = $module;
-        $this->logAs = LogType::PRINT;
-    }
+    public const PRINT = 0;
+    public const DUMP = 1;
+    public const EXPORT = 2;
 
     /**
-     * Sets the log type.
+     * FileLoggerStrategy constructor.
      *
-     * @param LogType $logType The type of logging.
+     * @param string $fileName    The file path where logs will be written.
+     * @param string $moduleName  The name of the module for trace information.
+     * @param int    $logType     The type of log formatting.
      */
-    public function setLogType(LogType $logType): void
+    public function __construct(string $fileName, string $moduleName = 'unknown', int $logType = self::PRINT)
     {
-        $this->logAs = $logType;
+        $this->fileName = $fileName;
+        $this->moduleName = $moduleName;
+        $this->logType = $logType;
     }
 
     /**
-     * Writes a message to the log.
+     * Logs a message to a file.
      *
-     * @param mixed $message      The message to write.
-     * @param bool  $clearBefore Whether to clear the log file before writing.
+     * @param string $message      The message to log.
+     * @param array  $context      Additional context (unused in this strategy).
+     * @param bool   $clearBefore Whether to clear existing logs before writing.
      *
      * @return bool True on success, false on failure.
      */
-    public function writeToLog(mixed $message, bool $clearBefore = false): bool
+    public function log(string $message, array $context = [], bool $clearBefore = false): bool
     {
         try {
             if ($clearBefore && file_exists($this->fileName)) {
                 if (!unlink($this->fileName)) {
-                    throw new RuntimeException("Failed to delete log file: {$this->fileName}");
+                    throw new RuntimeException("Failed to clear log file: {$this->fileName}");
                 }
             }
 
@@ -89,6 +70,7 @@ class LoggerHelper
                 $logEntries[] = "- - - - - [{$formattedTime}{$timerInfo}] - - - - -";
             }
 
+            // Transform the message based on log type
             $transformedMessage = $this->transformLogMessage($message);
 
             $trace = $this->moduleName;
@@ -123,26 +105,31 @@ class LoggerHelper
                 throw new RuntimeException("Failed to lock log file: {$this->fileName}");
             }
         } catch (Exception $ex) {
-            // Additional error handling can be implemented here, such as sending to an external service
-            error_log("LoggerHelper Error: " . $ex->getMessage());
+            // Additional error handling can be implemented here
+            error_log("FileLoggerStrategy Error: " . $ex->getMessage());
             return false;
         }
     }
 
     /**
-     * Transforms the log message into a string.
+     * Transforms the log message based on the log type.
      *
-     * @param mixed $message The message to transform.
+     * @param string $message The message to transform.
      *
      * @return string The transformed message.
      */
-    private function transformLogMessage(mixed $message): string
+    private function transformLogMessage(string $message): string
     {
-        return match ($this->logAs) {
-            LogType::PRINT => print_r($message, true),
-            LogType::DUMP => var_export($message, true),
-            LogType::EXPORT => $this->varExportPretty($message),
-        };
+        switch ($this->logType) {
+            case self::PRINT:
+                return $message;
+            case self::DUMP:
+                return var_export($message, true);
+            case self::EXPORT:
+                return $this->varExportPretty($message);
+            default:
+                return $message;
+        }
     }
 
     /**
@@ -168,36 +155,5 @@ class LoggerHelper
         ], $lines);
         $export = "[\n" . implode(PHP_EOL, array_filter(['['] + $lines)) . "\n]";
         return $export;
-    }
-
-    /**
-     * Static method to add a log entry with DUMP type.
-     *
-     * @param mixed  $message      The message to log.
-     * @param string $topic        The topic name for the log.
-     * @param bool   $clearBefore Whether to clear the log file before writing.
-     *
-     * @return bool True on success, false on failure.
-     */
-    public static function addToLog(mixed $message, string $topic = '', bool $clearBefore = false): bool
-    {
-        $logger = new self(topic: $topic);
-        $logger->setLogType(LogType::DUMP);
-        return $logger->writeToLog($message, $clearBefore);
-    }
-
-    /**
-     * Static method to log an array with EXPORT type.
-     *
-     * @param mixed  $message The array or object to log.
-     * @param string $topic   The topic name for the log.
-     *
-     * @return bool True on success, false on failure.
-     */
-    public static function arrayToLog(mixed $message, string $topic = ''): bool
-    {
-        $logger = new self(topic: $topic);
-        $logger->setLogType(LogType::EXPORT);
-        return $logger->writeToLog($message);
     }
 }
